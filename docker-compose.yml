@@ -1,0 +1,96 @@
+version: '3.7'
+services:
+  
+  db:
+    container_name: postgres_service
+    image: postgres:alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      POSTGRES_PASSWORD: $POSTGRES_PASSWORD
+      POSTGRES_USER: $POSTGRES_USER
+      POSTGRES_DB: $POSTGRES_NAME
+    ports:
+      - "5432"
+    restart: always
+
+  web:
+    container_name: web_service
+    image: delivery_service
+    build: .
+    command: >
+      /bin/sh -c "python manage.py migrate --no-input 
+      && python manage.py collectstatic --no-input 
+      && python manage.py createcachetable
+      && python -m gunicorn delivery.wsgi:application --bind 0.0.0.0:8000"
+    volumes:
+      - .:/app
+      - static_volume:/app/static/
+      - media_volume:/app/media/
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - db
+    restart: always
+
+
+  redis:
+    container_name: redis_service
+    image: redis:5-alpine
+    env_file:
+      - .env
+    volumes:
+      - redis_data:/data
+    environment:
+      REDIS_REPLICATION_MODE: master
+      REDIS_PASSWORD: $REDIS_PASSWORD
+    ports:
+      - "6375:6379"
+    restart: always
+
+
+  celery:
+    container_name: celery
+    image: delivery_service
+    user: nobody
+    command: celery -A delivery worker -l INFO
+    restart: always
+    volumes:
+      - .:/app
+      - media_volume:/app/media/
+    env_file:
+      - ./.env
+    depends_on:
+      - redis
+      - db
+      - web
+
+  celery-beat:
+    container_name: celery-beat
+    image: delivery_service
+    command: celery -A delivery beat -l info --pidfile=
+    volumes:
+      - .:/app
+    env_file:
+      - ./.env
+    depends_on:
+      - redis
+      - db
+      - web
+    restart: always
+    logging:
+      options:
+        max-size: 10m
+    links:
+      - redis
+
+
+volumes:
+  postgres_data:
+  media_volume:
+  static_volume:
+  redis_data:
